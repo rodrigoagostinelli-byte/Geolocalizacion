@@ -1,6 +1,8 @@
 import io
 import math
 import time
+import uuid
+from datetime import datetime
 import requests
 import pandas as pd
 import streamlit as st
@@ -243,6 +245,10 @@ if uploaded:
         result["Latitude"] = result["latitud"]
         result["Longitude"] = result["longitud"]
         st.session_state["geo_result"] = result
+        st.session_state["geo_original_columns"] = list(df.columns)
+        run_time = datetime.now().astimezone()
+        st.session_state["geo_run_datetime"] = run_time.isoformat(timespec="seconds")
+        st.session_state["geo_run_id"] = f"GEO-{run_time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
         st.session_state["geo_address_col"] = address_col
         st.session_state["geo_threshold"] = threshold
         progress.empty()
@@ -431,11 +437,11 @@ if "geo_result" in st.session_state:
                 folium.CircleMarker(
                     location=[lat, lon],
                     radius=6,
-                    color="#83c79b",
+                    color="#ffffff",
                     weight=2,
                     fill=True,
-                    fill_color="#83c79b",
-                    fill_opacity=0.9,
+                    fill_color="#006B45",
+                    fill_opacity=1.0,
                     tooltip=label,
                     popup=folium.Popup(
                         f"<b>{label}</b><br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
@@ -460,26 +466,31 @@ if "geo_result" in st.session_state:
     summary_cols = [c for c in [address_col, "latitud", "longitud", "distancia_m", "fuente_final", "validado", "decision_usuario", "estado"] if c in result.columns]
     st.dataframe(result[summary_cols], use_container_width=True, hide_index=True, height=300)
 
-    valid_only = result[result["validado"].fillna(False) & result["latitud"].notna() & result["longitud"].notna()].copy()
+    valid_only = result[
+        result["validado"].fillna(False)
+        & result["latitud"].notna()
+        & result["longitud"].notna()
+    ].copy()
     pending_count = len(result) - len(valid_only)
-    d1, d2 = st.columns([2, 1])
-    with d1:
-        st.write(f"**{len(valid_only)} direcciones listas para descargar** · {pending_count} pendientes o sin coordenadas.")
-        include_pending = st.checkbox("Incluir también las pendientes en el CSV", value=False, help="Si lo activás, las pendientes se exportan con su estado actual para que no se pierda el trabajo de revisión.")
-    with d2:
-        export_df = result.copy() if include_pending else valid_only.copy()
-        export_df["Name"] = export_df[address_col].fillna("").astype(str)
-        export_df["Address"] = export_df[address_col].fillna("").astype(str)
-        export_df["Latitude"] = export_df["latitud"]
-        export_df["Longitude"] = export_df["longitud"]
-        st.download_button(
-            "Descargar CSV validado",
-            data=export_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="mis_lugares_validados.csv",
-            mime="text/csv", type="primary", use_container_width=True,
-            disabled=export_df.empty,
-        )
-    st.caption("El CSV conserva las columnas originales e incluye Name, Address, Latitude y Longitude. Por defecto, solo exporta ubicaciones validadas.")
+    st.write(f"**{len(valid_only)} direcciones validadas listas para descargar** · {pending_count} pendientes o sin coordenadas.")
+
+    # Export only the original uploaded columns plus the single final coordinate pair
+    # and lightweight audit metadata. Internal candidate coordinates never leave the app.
+    original_columns = st.session_state.get("geo_original_columns", [])
+    export_df = valid_only[original_columns].copy()
+    export_df["Latitude"] = valid_only["latitud"].astype(float).values
+    export_df["Longitude"] = valid_only["longitud"].astype(float).values
+    export_df["fecha_geocodificacion"] = st.session_state.get("geo_run_datetime", datetime.now().astimezone().isoformat(timespec="seconds"))
+    export_df["id_proceso"] = st.session_state.get("geo_run_id", "GEO-SIN-ID")
+
+    st.download_button(
+        "Descargar CSV validado",
+        data=export_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"mis_lugares_{st.session_state.get('geo_run_id', 'validados')}.csv",
+        mime="text/csv", type="primary", use_container_width=True,
+        disabled=export_df.empty,
+    )
+    st.caption("El CSV final conserva todas las columnas del archivo original y agrega únicamente Latitude, Longitude, fecha_geocodificacion e id_proceso. Las coordenadas alternativas y los datos internos de revisión no se exportan.")
 
     with st.expander("Estados y criterios"):
         st.markdown("""
