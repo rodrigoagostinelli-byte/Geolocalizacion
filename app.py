@@ -7,7 +7,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
-st.set_page_config(page_title="Mis lugares", page_icon="📍", layout="wide")
+st.set_page_config(page_title="Mis lugares", layout="wide")
 
 # Visual styling: simple, clean, map-first.
 st.markdown("""
@@ -31,7 +31,7 @@ st.markdown("""
 
 hero_left, hero_right = st.columns([5, 1])
 with hero_left:
-    st.title("📍 Mis lugares")
+    st.title("Mis lugares")
     st.markdown("**De una lista de direcciones a un mapa de lugares favoritos.**")
     st.caption("Cargá un CSV · contrastá coordenadas · validá cada ubicación dudosa · descargá el resultado.")
     st.markdown("<div class='brand-rule'></div>", unsafe_allow_html=True)
@@ -138,7 +138,7 @@ if uploaded:
             help="Si las dos fuentes devuelven puntos a una distancia menor o igual a este valor, se consideran coincidentes."
         )
 
-    if st.button("🔎 Geocodificar direcciones", type="primary", use_container_width=True):
+    if st.button("Geocodificar direcciones", type="primary", use_container_width=True):
         agent = "MisLugaresStreamlit/1.1"
         if contact.strip():
             agent += f" (contact: {contact.strip()})"
@@ -282,7 +282,7 @@ if "geo_result" in st.session_state:
     if review_candidates:
         def row_label(idx):
             r = result.loc[idx]
-            status_txt = "✓ validada" if bool(r.get("validado", False)) else "! pendiente"
+            status_txt = "Validada" if bool(r.get("validado", False)) else "Pendiente"
             return f"{idx + 1}. {str(r.get(address_col, 'Dirección'))[:90]} · {status_txt}"
 
         selected_idx = st.selectbox(
@@ -402,7 +402,61 @@ if "geo_result" in st.session_state:
 
     result = st.session_state["geo_result"].copy()
     st.divider()
-    st.subheader("4. Resumen y descarga")
+    st.subheader("4. Mapa de ubicaciones validadas")
+    show_all_validated = st.checkbox(
+        "Mostrar todas las ubicaciones validadas en el mapa",
+        value=False,
+        help="Muestra únicamente los puntos validados y guardados para la descarga."
+    )
+    valid_for_map = result[
+        result["validado"].fillna(False)
+        & result["latitud"].notna()
+        & result["longitud"].notna()
+    ].copy()
+    if show_all_validated:
+        if valid_for_map.empty:
+            st.info("Todavía no hay ubicaciones validadas para mostrar.")
+        else:
+            overview_map = folium.Map(
+                location=[valid_for_map["latitud"].astype(float).mean(), valid_for_map["longitud"].astype(float).mean()],
+                zoom_start=5,
+                control_scale=True,
+                tiles="OpenStreetMap",
+            )
+            bounds = []
+            for _, valid_row in valid_for_map.iterrows():
+                lat = float(valid_row["latitud"])
+                lon = float(valid_row["longitud"])
+                label = str(valid_row.get(address_col, "Dirección"))
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=6,
+                    color="#83c79b",
+                    weight=2,
+                    fill=True,
+                    fill_color="#83c79b",
+                    fill_opacity=0.9,
+                    tooltip=label,
+                    popup=folium.Popup(
+                        f"<b>{label}</b><br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
+                        max_width=360,
+                    ),
+                ).add_to(overview_map)
+                bounds.append([lat, lon])
+            if len(bounds) > 1:
+                overview_map.fit_bounds(
+                    [[min(p[0] for p in bounds), min(p[1] for p in bounds)],
+                     [max(p[0] for p in bounds), max(p[1] for p in bounds)]],
+                    padding=(35, 35),
+                )
+            else:
+                overview_map.location = bounds[0]
+                overview_map.zoom_start = 15
+            st_folium(overview_map, use_container_width=True, height=520, returned_objects=[])
+            st.caption(f"Se muestran {len(valid_for_map)} ubicaciones validadas. Las pendientes y las que no tienen coordenadas no aparecen en este mapa.")
+
+    st.divider()
+    st.subheader("5. Resumen y descarga")
     summary_cols = [c for c in [address_col, "latitud", "longitud", "distancia_m", "fuente_final", "validado", "decision_usuario", "estado"] if c in result.columns]
     st.dataframe(result[summary_cols], use_container_width=True, hide_index=True, height=300)
 
@@ -419,7 +473,7 @@ if "geo_result" in st.session_state:
         export_df["Latitude"] = export_df["latitud"]
         export_df["Longitude"] = export_df["longitud"]
         st.download_button(
-            "⬇️ Descargar CSV validado",
+            "Descargar CSV validado",
             data=export_df.to_csv(index=False).encode("utf-8-sig"),
             file_name="mis_lugares_validados.csv",
             mime="text/csv", type="primary", use_container_width=True,
