@@ -12,20 +12,20 @@ st.set_page_config(page_title="Mis lugares", page_icon="📍", layout="wide")
 # Visual styling: simple, clean, map-first.
 st.markdown("""
 <style>
-    .block-container {max-width: 1280px; padding-top: 1.8rem; padding-bottom: 3rem;}
-    h1 {letter-spacing: -0.035em;}
-    div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #f8fbff 0%, #f2f6fc 100%);
-        border: 1px solid #e2eaf4; padding: 16px 18px; border-radius: 14px;
-    }
-    div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
-        border-radius: 10px; min-height: 2.7rem; font-weight: 600;
-    }
-    div[data-testid="stFileUploader"] {
-        background: #f8fbff; border: 1px dashed #b9cbe2;
-        padding: 12px; border-radius: 14px;
-    }
-    .small-note {color: #64748b; font-size: 0.9rem;}
+    :root { --dentsu-blue:#003c6c; --dentsu-mid:#0179d8; --dentsu-cyan:#1fc7ff;
+            --dentsu-white:#ffffff; --dentsu-offwhite:#fafbfd; --dentsu-gray:#B1B6C0;
+            --dentsu-light:#eeeeee; --dentsu-lavender:#A78BFA; --dentsu-orange:#FF8A3D;
+            --signal-red:#8d1d1c; --signal-yellow:#ffde17; --signal-green:#83c79b; --signal-whatsapp:#00bb2d; }
+    .stApp {background:var(--dentsu-offwhite);}
+    .block-container {max-width: 1380px; padding-top: 1.8rem; padding-bottom: 3rem;}
+    h1, h2, h3 {color:var(--dentsu-blue); letter-spacing: -0.025em;}
+    div[data-testid="stMetric"] {background:var(--dentsu-white); border:1px solid var(--dentsu-light); padding:16px 18px; border-radius:14px;}
+    div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {border-radius:10px; min-height:2.7rem; font-weight:600; border-color:var(--dentsu-mid);}
+    div[data-testid="stButton"] > button[kind="primary"], div[data-testid="stDownloadButton"] > button[kind="primary"] {background:var(--dentsu-blue); color:white;}
+    div[data-testid="stFileUploader"] {background:var(--dentsu-white); border:1px dashed var(--dentsu-gray); padding:12px; border-radius:14px;}
+    div[data-testid="stAlert"] {border-radius:12px;}
+    .small-note {color:#596575; font-size:0.9rem;}
+    .brand-rule {height:5px; border-radius:6px; background:linear-gradient(90deg,#003c6c 0%,#0179d8 50%,#1fc7ff 100%); margin:0.3rem 0 1rem 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,15 +33,16 @@ hero_left, hero_right = st.columns([5, 1])
 with hero_left:
     st.title("📍 Mis lugares")
     st.markdown("**De una lista de direcciones a un mapa de lugares favoritos.**")
-    st.caption("Cargá un CSV · contrastá coordenadas · revisá los puntos dudosos · descargá el resultado.")
+    st.caption("Cargá un CSV · contrastá coordenadas · validá cada ubicación dudosa · descargá el resultado.")
+    st.markdown("<div class='brand-rule'></div>", unsafe_allow_html=True)
 with hero_right:
     st.markdown("<div style='text-align:right;padding-top:12px;font-size:0.9rem;color:#64748b'>GRATUITO<br>OSM + Photon</div>", unsafe_allow_html=True)
 
 with st.expander("Cómo funciona y qué revisar"):
     st.write(
-        "La app consulta Nominatim y Photon. Si los puntos están cerca, los marca como "
-        "coincidentes; si discrepan o solo responde una fuente, los deja para revisión. "
-        "Los puntos dudosos también se muestran en el mapa para facilitar la comparación."
+        "La app consulta Nominatim y Photon. Las coincidencias quedan seleccionadas como válidas de forma provisional; "
+        "si las fuentes discrepan o solo responde una, podés revisar la dirección en el mapa y elegir la coordenada final "
+        "antes de descargar. También podés elegir manualmente un punto haciendo clic en el mapa."
     )
     st.caption(
         "La coincidencia entre dos fuentes no garantiza que el número de puerta sea exacto. "
@@ -252,121 +253,186 @@ if "geo_result" in st.session_state:
     address_col = st.session_state.get("geo_address_col", result.columns[0])
     threshold = st.session_state.get("geo_threshold", 100)
 
+    # Stable per-row IDs allow review decisions to survive Streamlit reruns.
+    if "geo_result" in st.session_state and "validado" not in result.columns:
+        result["validado"] = result["estado"].astype(str).str.startswith("COINCIDEN")
+        result["decision_usuario"] = result["estado"].apply(lambda x: "Coincidencia automática" if str(x).startswith("COINCIDEN") else "Pendiente")
+        st.session_state["geo_result"] = result.copy()
+    result = st.session_state["geo_result"].copy()
+    if "fila_id" not in result.columns:
+        result["fila_id"] = range(len(result))
+        st.session_state["geo_result"] = result.copy()
+
     st.divider()
-    st.subheader("3. Revisá el mapa y descargá tus lugares")
+    st.subheader("3. Validá las ubicaciones")
+    st.caption("Las coincidencias se preseleccionan como válidas. Las discrepancias y los resultados únicos quedan pendientes hasta que elijas una opción.")
 
     total = len(result)
     found = int(result["latitud"].notna().sum())
-    good = int(result["estado"].astype(str).str.startswith("COINCIDEN").sum())
-    review = int(result["estado"].astype(str).str.contains("REVISAR|DISCREPAN|ERROR", regex=True).sum())
-
+    approved = int(result["validado"].fillna(False).sum())
+    pending = int((~result["validado"].fillna(False) & result["latitud"].notna()).sum())
+    missing = int(result["latitud"].isna().sum())
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total", f"{total:,}")
+    m1.metric("Direcciones", f"{total:,}")
     m2.metric("Con coordenadas", f"{found:,}")
-    m3.metric("Fuentes coinciden", f"{good:,}")
-    m4.metric("Para revisar", f"{review:,}")
+    m3.metric("Validadas", f"{approved:,}")
+    m4.metric("Pendientes / sin ubicar", f"{pending + missing:,}")
 
-    map_filter = st.radio(
-        "Qué querés ver en el mapa",
-        options=["Todos", "Buenas · fuentes coinciden", "Revisar · dudosas"],
-        horizontal=True,
-        key="map_filter",
-    )
+    review_candidates = result.index[result["latitud"].notna()].tolist()
+    if review_candidates:
+        def row_label(idx):
+            r = result.loc[idx]
+            status_txt = "✓ validada" if bool(r.get("validado", False)) else "! pendiente"
+            return f"{idx + 1}. {str(r.get(address_col, 'Dirección'))[:90]} · {status_txt}"
 
-    mapped = result.dropna(subset=["latitud", "longitud"]).copy()
-    if map_filter == "Buenas · fuentes coinciden":
-        mapped = mapped[mapped["estado"].astype(str).str.startswith("COINCIDEN")]
-    elif map_filter == "Revisar · dudosas":
-        mapped = mapped[~mapped["estado"].astype(str).str.startswith("COINCIDEN")]
-
-    left, right = st.columns([1.4, 1])
-    with left:
-        st.markdown("#### Mapa de ubicaciones")
-        if mapped.empty:
-            st.info("No hay puntos para mostrar en esta vista.")
-        else:
-            center = [
-                mapped["latitud"].astype(float).mean(),
-                mapped["longitud"].astype(float).mean()
-            ]
-            map_obj = folium.Map(location=center, zoom_start=12, control_scale=True, tiles="OpenStreetMap")
-
-            for _, row in mapped.iterrows():
-                name = str(row.get("Name", row.get(address_col, "Dirección")))
-                status_value = str(row.get("estado", ""))
-                is_good = status_value.startswith("COINCIDEN")
-                color = "green" if is_good else "red"
-                popup_html = (
-                    f"<b>{name}</b><br>{status_value}<br>"
-                    f"Latitud: {float(row['latitud']):.6f}<br>"
-                    f"Longitud: {float(row['longitud']):.6f}<br>"
-                    f"Distancia entre fuentes: {row.get('distancia_m', '')} m"
-                )
-                folium.Marker(
-                    [float(row["latitud"]), float(row["longitud"])],
-                    tooltip=name,
-                    popup=folium.Popup(popup_html, max_width=340),
-                    icon=folium.Icon(color=color, icon="map-marker", prefix="fa"),
-                ).add_to(map_obj)
-
-                # For disagreement cases, display Photon result too so users can compare both candidates.
-                if status_value.startswith("DISCREPAN") and pd.notna(row.get("lat_photon")) and pd.notna(row.get("lon_photon")):
-                    folium.CircleMarker(
-                        location=[float(row["lat_photon"]), float(row["lon_photon"])],
-                        radius=7, color="orange", fill=True, fill_opacity=0.85,
-                        tooltip=f"{name} · alternativa Photon",
-                        popup=folium.Popup(
-                            f"<b>{name}</b><br>Alternativa Photon<br>"
-                            f"Latitud: {float(row['lat_photon']):.6f}<br>"
-                            f"Longitud: {float(row['lon_photon']):.6f}",
-                            max_width=340
-                        )
-                    ).add_to(map_obj)
-
-            # Fit map bounds using both selected primary and alternate Photon points.
-            bounds_points = []
-            for _, row in mapped.iterrows():
-                bounds_points.append([float(row["latitud"]), float(row["longitud"])])
-                if str(row.get("estado", "")).startswith("DISCREPAN") and pd.notna(row.get("lat_photon")) and pd.notna(row.get("lon_photon")):
-                    bounds_points.append([float(row["lat_photon"]), float(row["lon_photon"])])
-            if len(bounds_points) > 1:
-                map_obj.fit_bounds([
-                    [min(p[0] for p in bounds_points), min(p[1] for p in bounds_points)],
-                    [max(p[0] for p in bounds_points), max(p[1] for p in bounds_points)]
-                ], padding=(25, 25))
-
-            st_folium(map_obj, use_container_width=True, height=500, returned_objects=[])
-
-        st.markdown(
-            '<span style="color:#15803d;font-weight:600">● Verde: fuentes coinciden</span>'
-            '&nbsp;&nbsp;&nbsp; <span style="color:#dc2626;font-weight:600">● Rojo: revisar</span>'
-            '&nbsp;&nbsp;&nbsp; <span style="color:#ea580c;font-weight:600">● Naranja: alternativa Photon</span>',
-            unsafe_allow_html=True
+        selected_idx = st.selectbox(
+            "Elegí una dirección para revisar",
+            options=review_candidates,
+            format_func=row_label,
+            key="review_row_selector",
         )
+        selected = result.loc[selected_idx]
+        address_text = str(selected.get(address_col, ""))
+        st.markdown(f"#### {address_text}")
+        st.caption(f"Estado: {selected.get('estado', '')} · Diferencia entre fuentes: {selected.get('distancia_m', '—')} m")
 
-    with right:
-        st.markdown("#### Resultados")
-        table_cols = [c for c in [address_col, "latitud", "longitud", "distancia_m", "estado"] if c in result.columns]
-        st.dataframe(result[table_cols], use_container_width=True, hide_index=True, height=440)
+        map_col, choice_col = st.columns([1.6, 1])
+        candidate_map = folium.Map(
+            location=[-34.6037, -58.3816], zoom_start=12, control_scale=True,
+            tiles="OpenStreetMap"
+        )
+        candidate_points = []
+        candidates = []
+        if pd.notna(selected.get("lat_nominatim")) and pd.notna(selected.get("lon_nominatim")):
+            candidates.append(("Nominatim", float(selected["lat_nominatim"]), float(selected["lon_nominatim"]), "#0179d8", selected.get("direccion_nominatim", "")))
+        if pd.notna(selected.get("lat_photon")) and pd.notna(selected.get("lon_photon")):
+            candidates.append(("Photon", float(selected["lat_photon"]), float(selected["lon_photon"]), "#FF8A3D", selected.get("direccion_photon", "")))
+        # Avoid duplicate markers if both sources return effectively the same coordinate.
+        for name, lat, lon, color, address_desc in candidates:
+            candidate_points.append([lat, lon])
+            folium.CircleMarker(
+                location=[lat, lon], radius=9, color=color, weight=3,
+                fill=True, fill_color=color, fill_opacity=0.9,
+                tooltip=f"{name} · {lat:.6f}, {lon:.6f}",
+                popup=folium.Popup(f"<b>{name}</b><br>{address_desc}<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}", max_width=360),
+            ).add_to(candidate_map)
+        if bool(selected.get("validado", False)) and pd.notna(selected.get("latitud")) and pd.notna(selected.get("longitud")):
+            chosen_lat, chosen_lon = float(selected["latitud"]), float(selected["longitud"])
+            candidate_points.append([chosen_lat, chosen_lon])
+            folium.CircleMarker(
+                location=[chosen_lat, chosen_lon], radius=14, color="#00bb2d", weight=4,
+                fill=False, tooltip=f"Ubicación validada · {chosen_lat:.6f}, {chosen_lon:.6f}",
+                popup=folium.Popup(f"<b>Ubicación final validada</b><br>Lat: {chosen_lat:.6f}<br>Lon: {chosen_lon:.6f}", max_width=320),
+            ).add_to(candidate_map)
+        if candidate_points:
+            candidate_map.location = [sum(p[0] for p in candidate_points)/len(candidate_points), sum(p[1] for p in candidate_points)/len(candidate_points)]
+            candidate_map.fit_bounds([[min(p[0] for p in candidate_points), min(p[1] for p in candidate_points)], [max(p[0] for p in candidate_points), max(p[1] for p in candidate_points)]], padding=(45, 45))
+            if len(candidate_points) == 1:
+                candidate_map.location = candidate_points[0]
+                candidate_map.zoom_start = 16
 
-        st.markdown("#### Descargar")
+        with map_col:
+            st.markdown("**Compará los candidatos**")
+            map_data = st_folium(candidate_map, use_container_width=True, height=390, returned_objects=["last_clicked"])
+            if map_data and map_data.get("last_clicked"):
+                clicked = map_data["last_clicked"]
+                st.session_state["manual_pick"] = (float(clicked["lat"]), float(clicked["lng"]))
+                st.session_state["manual_pick_row"] = int(selected_idx)
+            st.markdown(
+                '<span style="color:#0179d8;font-weight:600">● Nominatim</span>&nbsp;&nbsp; '
+                '<span style="color:#FF8A3D;font-weight:600">● Photon</span>&nbsp;&nbsp; '
+                '<span style="color:#00bb2d;font-weight:600">● Validada</span>',
+                unsafe_allow_html=True
+            )
+        with choice_col:
+            st.markdown("**Elegí qué ubicación guardar**")
+            nom_available = pd.notna(selected.get("lat_nominatim")) and pd.notna(selected.get("lon_nominatim"))
+            pho_available = pd.notna(selected.get("lat_photon")) and pd.notna(selected.get("lon_photon"))
+
+            def save_choice(lat, lon, source, decision):
+                current = st.session_state["geo_result"].copy()
+                current.loc[selected_idx, "latitud"] = lat
+                current.loc[selected_idx, "longitud"] = lon
+                current.loc[selected_idx, "fuente_final"] = source
+                current.loc[selected_idx, "validado"] = True
+                current.loc[selected_idx, "decision_usuario"] = decision
+                current.loc[selected_idx, "Latitude"] = lat
+                current.loc[selected_idx, "Longitude"] = lon
+                current.loc[selected_idx, "estado"] = "VALIDADA · " + decision.upper()
+                st.session_state["geo_result"] = current
+
+            if nom_available:
+                st.markdown(f"""**Nominatim**
+
+{selected.get('direccion_nominatim', 'Sin descripción')}
+
+`{selected['lat_nominatim']:.6f}, {selected['lon_nominatim']:.6f}`""")
+                if st.button("Usar Nominatim", key=f"use_nom_{selected_idx}", use_container_width=True):
+                    save_choice(float(selected["lat_nominatim"]), float(selected["lon_nominatim"]), "Nominatim", "Elección manual: Nominatim")
+                    st.rerun()
+            if pho_available:
+                st.markdown(f"""**Photon**
+
+{selected.get('direccion_photon', 'Sin descripción')}
+
+`{selected['lat_photon']:.6f}, {selected['lon_photon']:.6f}`""")
+                if st.button("Usar Photon", key=f"use_pho_{selected_idx}", use_container_width=True):
+                    save_choice(float(selected["lat_photon"]), float(selected["lon_photon"]), "Photon", "Elección manual: Photon")
+                    st.rerun()
+            manual_pick = st.session_state.get("manual_pick") if st.session_state.get("manual_pick_row") == int(selected_idx) else None
+            if manual_pick:
+                st.info(f"Punto manual seleccionado: {manual_pick[0]:.6f}, {manual_pick[1]:.6f}")
+                if st.button("Usar punto elegido en el mapa", key=f"use_manual_{selected_idx}", type="primary", use_container_width=True):
+                    save_choice(manual_pick[0], manual_pick[1], "Manual en mapa", "Elección manual en mapa")
+                    st.session_state.pop("manual_pick", None)
+                    st.session_state.pop("manual_pick_row", None)
+                    st.rerun()
+            if bool(selected.get("validado", False)):
+                st.success(f"Esta dirección está validada. Fuente final: {selected.get('fuente_final', '')}")
+            else:
+                st.warning("Esta dirección sigue pendiente. Elegí una fuente o marcá un punto en el mapa.")
+            if st.button("Marcar como pendiente", key=f"pending_{selected_idx}", use_container_width=True):
+                current = st.session_state["geo_result"].copy()
+                current.loc[selected_idx, "validado"] = False
+                current.loc[selected_idx, "decision_usuario"] = "Pendiente de revisión"
+                st.session_state["geo_result"] = current
+                st.rerun()
+    else:
+        st.info("No hay coordenadas candidatas para revisar.")
+
+    result = st.session_state["geo_result"].copy()
+    st.divider()
+    st.subheader("4. Resumen y descarga")
+    summary_cols = [c for c in [address_col, "latitud", "longitud", "distancia_m", "fuente_final", "validado", "decision_usuario", "estado"] if c in result.columns]
+    st.dataframe(result[summary_cols], use_container_width=True, hide_index=True, height=300)
+
+    valid_only = result[result["validado"].fillna(False) & result["latitud"].notna() & result["longitud"].notna()].copy()
+    pending_count = len(result) - len(valid_only)
+    d1, d2 = st.columns([2, 1])
+    with d1:
+        st.write(f"**{len(valid_only)} direcciones listas para descargar** · {pending_count} pendientes o sin coordenadas.")
+        include_pending = st.checkbox("Incluir también las pendientes en el CSV", value=False, help="Si lo activás, las pendientes se exportan con su estado actual para que no se pierda el trabajo de revisión.")
+    with d2:
+        export_df = result.copy() if include_pending else valid_only.copy()
+        export_df["Name"] = export_df[address_col].fillna("").astype(str)
+        export_df["Address"] = export_df[address_col].fillna("").astype(str)
+        export_df["Latitude"] = export_df["latitud"]
+        export_df["Longitude"] = export_df["longitud"]
         st.download_button(
-            "⬇️ Descargar CSV para Google My Maps",
-            data=result.to_csv(index=False).encode("utf-8-sig"),
-            file_name="mis_lugares_geocodificados.csv",
-            mime="text/csv",
-            type="primary",
-            use_container_width=True,
+            "⬇️ Descargar CSV validado",
+            data=export_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="mis_lugares_validados.csv",
+            mime="text/csv", type="primary", use_container_width=True,
+            disabled=export_df.empty,
         )
-        st.caption("El CSV conserva las direcciones originales e incluye Name, Address, Latitude y Longitude para importar los puntos.")
+    st.caption("El CSV conserva las columnas originales e incluye Name, Address, Latitude y Longitude. Por defecto, solo exporta ubicaciones validadas.")
 
     with st.expander("Estados y criterios"):
         st.markdown("""
-        - **COINCIDEN · REVISAR ALTURA:** ambas fuentes devuelven puntos dentro del umbral. La altura todavía puede requerir validación.
-        - **DISCREPAN · REVISAR:** los puntos difieren más del umbral. El mapa muestra el resultado de Nominatim en rojo y la alternativa Photon en naranja.
-        - **SOLO NOMINATIM / SOLO PHOTON · REVISAR:** solo una fuente devolvió un resultado; se muestra en rojo.
-        - **NO ENCONTRADA:** ninguna fuente devolvió una ubicación.
-        - **ERROR DE CONSULTA:** hubo un problema consultando los servicios.
+        - **Coincidencia automática:** ambas fuentes devolvieron puntos dentro del umbral configurado; se preseleccionan, pero podés corregirlos.
+        - **Discrepancia / fuente única:** requiere que elijas Nominatim, Photon o una coordenada manual en el mapa.
+        - **Punto manual:** hacé clic en el mapa donde debería estar el lugar y confirmá con el botón de ubicación manual.
+        - **Sin coordenadas:** queda fuera del CSV validado hasta que pueda ubicarse.
         """)
     st.caption("Importación: en Google My Maps creá un mapa → Importar → subí el CSV → elegí Latitude y Longitude para posicionar los puntos y Name para el título.")
 else:
