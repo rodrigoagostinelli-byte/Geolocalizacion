@@ -523,15 +523,6 @@ with tab_export:
         review_filter = st.session_state.get("review_status_filter", "Todos")
         st.divider()
         st.subheader("5. Resumen y descarga")
-        summary_cols = [c for c in [address_col, "latitud", "longitud", "distancia_m", "fuente_final", "validado", "decision_usuario", "estado"] if c in result.columns]
-        if review_filter == "Solo pendientes":
-            summary_view = result[~result["validado"].fillna(False)]
-        elif review_filter == "Solo validados":
-            summary_view = result[result["validado"].fillna(False)]
-        else:
-            summary_view = result
-        st.dataframe(summary_view[summary_cols], use_container_width=True, hide_index=True, height=300)
-
         valid_only = result[
             result["validado"].fillna(False)
             & result["latitud"].notna()
@@ -550,6 +541,19 @@ with tab_export:
         export_df["id_proceso"] = st.session_state.get("geo_run_id", "GEO-SIN-ID")
 
         process_id = st.session_state.get("geo_run_id", "validados")
+
+        st.markdown("**Vista previa del archivo que se descargará**")
+        st.caption("La tabla muestra exactamente las filas validadas y las columnas que se incluirán en el archivo final.")
+        if export_df.empty:
+            st.info("Todavía no hay ubicaciones validadas para mostrar o descargar. Validá al menos una dirección en la pestaña Validar.")
+        else:
+            st.dataframe(
+                export_df.reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                height=min(420, max(120, 38 * (len(export_df) + 1))),
+                key="download_preview_table",
+            )
 
         # CSV remains available for Google My Maps and other tools. Decimal coordinates
         # are exported using the standard dot separator; Excel's regional settings can
