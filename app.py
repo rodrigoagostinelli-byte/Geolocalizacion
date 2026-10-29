@@ -483,14 +483,53 @@ if "geo_result" in st.session_state:
     export_df["fecha_geocodificacion"] = st.session_state.get("geo_run_datetime", datetime.now().astimezone().isoformat(timespec="seconds"))
     export_df["id_proceso"] = st.session_state.get("geo_run_id", "GEO-SIN-ID")
 
-    st.download_button(
-        "Descargar CSV validado",
-        data=export_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"mis_lugares_{st.session_state.get('geo_run_id', 'validados')}.csv",
-        mime="text/csv", type="primary", use_container_width=True,
-        disabled=export_df.empty,
-    )
-    st.caption("El CSV final conserva todas las columnas del archivo original y agrega únicamente Latitude, Longitude, fecha_geocodificacion e id_proceso. Las coordenadas alternativas y los datos internos de revisión no se exportan.")
+    process_id = st.session_state.get("geo_run_id", "validados")
+
+    # CSV remains available for Google My Maps and other tools. Decimal coordinates
+    # are exported using the standard dot separator; Excel's regional settings can
+    # change how a CSV is interpreted, so also provide a typed XLSX workbook.
+    csv_bytes = export_df.to_csv(index=False, decimal=".").encode("utf-8-sig")
+
+    xlsx_buffer = io.BytesIO()
+    with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="Ubicaciones validadas")
+        worksheet = writer.sheets["Ubicaciones validadas"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for col_idx, col_name in enumerate(export_df.columns, start=1):
+            values = [str(col_name)]
+            if not export_df.empty:
+                values.extend(export_df[col_name].dropna().astype(str).head(200).tolist())
+            width = min(max(max(len(v) for v in values) + 2, 12), 42)
+            worksheet.column_dimensions[worksheet.cell(row=1, column=col_idx).column_letter].width = width
+        for col_name in ("Latitude", "Longitude"):
+            col_idx = export_df.columns.get_loc(col_name) + 1
+            for row_idx in range(2, len(export_df) + 2):
+                worksheet.cell(row=row_idx, column=col_idx).number_format = "0.00000000"
+        for cell in worksheet[1]:
+            cell.font = cell.font.copy(bold=True, color="FFFFFF")
+            cell.fill = __import__("openpyxl").styles.PatternFill("solid", fgColor="003C6C")
+    xlsx_bytes = xlsx_buffer.getvalue()
+
+    download_cols = st.columns(2)
+    with download_cols[0]:
+        st.download_button(
+            "Descargar CSV validado",
+            data=csv_bytes,
+            file_name=f"mis_lugares_{process_id}.csv",
+            mime="text/csv", type="primary", use_container_width=True,
+            disabled=export_df.empty,
+        )
+    with download_cols[1]:
+        st.download_button(
+            "Descargar Excel validado",
+            data=xlsx_bytes,
+            file_name=f"mis_lugares_{process_id}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            disabled=export_df.empty,
+        )
+    st.caption("Ambos archivos conservan las columnas originales y agregan Latitude, Longitude, fecha_geocodificacion e id_proceso. En Excel, las coordenadas se guardan como números con ocho decimales. El CSV mantiene el punto decimal estándar para facilitar la importación en Google My Maps.")
 
     with st.expander("Estados y criterios"):
         st.markdown("""
